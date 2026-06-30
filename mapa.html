@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>parkP2P — Mapa Inteligente</title>
+    <link rel="stylesheet" href="css/mapa.css">
+</head>
+<body>
+
+<div class="phone-container">
+    <div class="logo-area">
+        <div class="logo-placeholder">ParkP2P</div>
+        <div class="menu-burger" onclick="cerrarSesion()" style="cursor:pointer;" title="Cerrar Sesión">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                <polyline points="16 17 21 12 16 7"></polyline>
+                <line x1="21" y1="12" x2="9" y2="12"></line>
+            </svg>
+        </div>
+    </div>
+
+    <h2 id="seccionTitle">Mis Reservas: Sección Piso 1</h2>
+    
+    <div class="floor-selector">
+        <button id="btnPiso1" class="floor-btn active" onclick="cambiarPiso(1)">Piso 1</button>
+        <button id="btnPiso2" class="floor-btn" onclick="cambiarPiso(2)">Piso 2</button>
+    </div>
+    
+    <!-- ÁREA COMPLETA DEL MAPA ISOMÉTRICO OBLICUO -->
+    <div class="map-viewport">
+        <div class="isometric-layout" id="layoutLanes">
+            <!-- Los 4 carriles oblicuos dinámicos se inyectan aquí -->
+        </div>
+    </div>
+
+    <!-- BARRA DE LEYENDAS RECREADA DE TU MOCKUP -->
+    <div class="legend-bar">
+        <div class="legend-item"><div class="legend-dot green"></div> Disponible</div>
+        <div class="legend-item"><div class="legend-dot red"></div> Ocupado</div>
+        <div class="legend-item"><div class="legend-dot yellow"></div> Reservado</div>
+    </div>
+    
+    <!-- CARD INFERIOR DE CONFIRMACIÓN DINÁMICA (BOTTOM SHEET) -->
+    <div class="reserva-card">
+        <div class="reserva-details-grid">
+            <div class="detail-block">
+                <span class="label">Reserva Actual:</span>
+                <span class="value" id="cardCajonId">Selecciona un cajón</span>
+            </div>
+            <div class="detail-block">
+                <span class="label">Ubicación:</span>
+                <span class="value" id="cardUbicacion">—</span>
+            </div>
+            <div class="detail-block">
+                <span class="label">Horario disponible:</span>
+                <span class="value">24 Horas Libre</span>
+            </div>
+        </div>
+        
+        <!-- Botón de acción contextual dinámico -->
+        <button class="btn-primary-action" id="btnPrincipal" onclick="ejecutarAccionContextual()" disabled>
+            Confirmar Reserva
+        </button>
+    </div>
+</div>
+
+<script>
+    let usuarioLogueado = null;
+    let pisoActual = 1;
+    let cajonSeleccionadoId = null;
+    let esPropietarioDelSeleccionado = false;
+    
+const NODES = ["https://reformist-unbaked-accuracy.ngrok-free.dev/api", "https://profound-partridge-revise.ngrok-free.dev/api"];   
+ function verificarAutenticacion() {
+        usuarioLogueado = sessionStorage.getItem('usuarioParkP2P');
+        if (!usuarioLogueado) {
+            window.location.href = "index.html";
+        } else {
+            cargarCajonesServidor();
+            iniciarSSE(); // Iniciar conexión en tiempo real
+        }
+    }
+
+    // --- NUEVO: Server-Sent Events para actualización instantánea ---
+    function iniciarSSE() {
+        NODES.forEach(nodeUrl => {
+            const url = nodeUrl.replace('/api', '/api/stream');
+            const es = new EventSource(url);
+            es.onmessage = (e) => {
+                if (e.data === 'update') {
+                    cargarCajonesServidor(); // Refresca automático si hay cambios
+                }
+            };
+            es.onerror = () => {
+                console.warn(`SSE desconectado de ${url}. Intentará reconectar automáticamente.`);
+            };
+        });
+    }
+
+    async function fetchConFailover(endpoint, method = 'GET', bodyData = null) {
+        const ordenNodos = pisoActual === 1 ? [0, 1] : [1, 0];
+        for (const index of ordenNodos) {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 1500); // Failover rápido
+                
+                const config = { method, headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' }, signal: controller.signal };
+                if (bodyData) config.body = JSON.stringify(bodyData);
+                const res = await fetch(`${NODES[index]}${endpoint}`, config);
+                
+                clearTimeout(timeoutId);
+
+                if (res.status >= 500) throw new Error("Server Error");
+
+                return { ok: res.ok, data: await res.json(), nodoId: index + 1 };
+            } catch (error) { console.warn(`Nodo ${index + 1} inaccesible.`); }
+        }
+        throw new Error("Red offline.");
+    }
+
+    async function cargarCajonesServidor() {
+        try {
+            const res = await fetchConFailover(`/cajones?piso=${pisoActual}`, 'GET');
+            
+            const layout = document.getElementById('layoutLanes');
+            layout.innerHTML = "";
+            
+            const totalCajones = res.data.cajones;
+            const tamañoCarril = 10;
+            
+            for (let i = 0; i < totalCajones.length; i += tamañoCarril) {
+                const carrilData = totalCajones.slice(i, i + tamañoCarril);
+                const laneElement = document.createElement('div');
+                laneElement.className = 'parking-lane';
+                
+                carrilData.forEach(cajon => {
+                    const box = document.createElement('div');
+                    box.innerText = `B-${cajon.id}`;
+                    
+                    if (!cajon.ocupado) {
+                        box.className = 'cajon libre';
+                        box.onclick = () => seleccionarCajonParaReserva(cajon.id, false);
+                    } else if (cajon.reservadoPor === usuarioLogueado) {
+                        box.className = 'cajon propio';
+                        box.onclick = () => seleccionarCajonParaReserva(cajon.id, true);
+                    } else {
+                        box.className = 'cajon ocupado';
+                    }
+                    
+                    if(cajonSeleccionadoId === cajon.id) {
+                        box.style.boxShadow = "0 0 0 3px #0f172a";
+                    }
+                    
+                    laneElement.appendChild(box);
+                });
+                layout.appendChild(laneElement);
+            }
+        } catch (e) { console.error(e.message); }
+    }
+
+    async function ejecutarAccionContextual() {
+        if (!cajonSeleccionadoId) return;
+        const btn = document.getElementById('btnPrincipal');
+        btn.disabled = true;
+
+        if (esPropietarioDelSeleccionado) {
+            const confirmar = confirm(`¿Deseas desocupar el Cajón B-${cajonSeleccionadoId}?`);
+            if (confirmar) {
+                try {
+                    const res = await fetchConFailover('/cancelar', 'POST', { 
+                        cajonId: cajonSeleccionadoId, 
+                        username: usuarioLogueado,
+                        pisoId: pisoActual // ◄ NUEVO
+                    });
+                    if (res.ok) resetearCard();
+                } catch (e) { alert("Error de red."); }
+            } else { btn.disabled = false; }
+        } else {
+            try {
+                const res = await fetchConFailover('/apartar', 'POST', { 
+                    cajonId: cajonSeleccionadoId, 
+                    username: usuarioLogueado,
+                    pisoId: pisoActual // ◄ NUEVO
+                });
+                if (res.ok) resetearCard();
+            } catch (e) { alert("Error de red."); }
+        }
+    }
+
+    function seleccionarCajonParaReserva(id, esPropio) {
+        cajonSeleccionadoId = id;
+        esPropietarioDelSeleccionado = esPropio;
+        
+        const cardCajon = document.getElementById('cardCajonId');
+        const cardUbi = document.getElementById('cardUbicacion');
+        const btn = document.getElementById('btnPrincipal');
+        
+        cardCajon.innerText = `Cajón B-${id}`;
+        cardUbi.innerText = id <= 20 ? "Cerca de Entrada" : "Cerca de Salida";
+        btn.disabled = false;
+        
+        if(esPropio) {
+            btn.innerText = "Liberar Reserva Actual";
+            btn.className = "btn-primary-action btn-danger";
+        } else {
+            btn.innerText = "Confirmar Reserva";
+            btn.className = "btn-primary-action";
+        }
+        cargarCajonesServidor(); 
+    }
+
+    function resetearCard() {
+        cajonSeleccionadoId = null;
+        document.getElementById('cardCajonId').innerText = "Selecciona un cajón";
+        document.getElementById('cardUbicacion').innerText = "—";
+        const btn = document.getElementById('btnPrincipal');
+        btn.innerText = "Confirmar Reserva";
+        btn.className = "btn-primary-action";
+        btn.disabled = true;
+        cargarCajonesServidor();
+    }
+
+    function cambiarPiso(piso) {
+        pisoActual = piso;
+        document.getElementById('btnPiso1').classList.toggle('active', piso === 1);
+        document.getElementById('btnPiso2').classList.toggle('active', piso === 2);
+        document.getElementById('seccionTitle').innerText = `Mis Reservas: Sección Piso ${piso}`;
+        resetearCard();
+    }
+
+    function cerrarSesion() {
+        sessionStorage.removeItem('usuarioParkP2P');
+        window.location.href = "index.html";
+    }
+
+    verificarAutenticacion();
+</script>
+</body>
+</html>

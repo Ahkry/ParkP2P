@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>parkP2P — Acceso</title>
+    <link rel="stylesheet" href="css/login.css">
+</head>
+<body>
+
+<div class="phone-container">
+    <div class="logo-area">
+        <div class="logo-placeholder">park<span>P2P</span></div>
+        <div id="logoSub" class="logo-sub">Inicia sesión en tu espacio inteligente.</div>
+    </div>
+
+    <h2 id="formTitle">Iniciar Sesión</h2>
+    
+    <div class="form-group" id="formGroup"></div>
+
+    <button class="btn-action" id="btnAction" onclick="procesarFormulario()">Iniciar Sesión</button>
+    
+    <div id="status"></div>
+
+    <div class="toggle-link" id="toggleLink" onclick="cambiarModo()">
+        ¿No tienes cuenta? <span>Regístrate</span>
+    </div>
+</div>
+
+<script>
+    let modoLogin = true;
+    const NODES = ["https://reformist-unbaked-accuracy.ngrok-free.dev/api", "https://profound-partridge-revise.ngrok-free.dev/api"];   
+    function renderizarFormulario() {
+        const group = document.getElementById('formGroup');
+        const logoSub = document.getElementById('logoSub');
+        const formTitle = document.getElementById('formTitle');
+        const btnAction = document.getElementById('btnAction');
+        const toggleLink = document.getElementById('toggleLink');
+        document.getElementById('status').innerText = "";
+
+        if (modoLogin) {
+            logoSub.innerText = "Inicia sesión en tu espacio inteligente.";
+            formTitle.innerText = "Ingresar al sistema";
+            btnAction.innerText = "Iniciar Sesión";
+            toggleLink.innerHTML = '¿No tienes cuenta? <span>Regístrate</span>';
+            
+            group.innerHTML = `
+                <div class="input-field-container">
+                    <label class="input-label">Usuario o Correo</label>
+                    <input type="text" id="login_user" placeholder="nombre@ejemplo.com">
+                </div>
+                <div class="input-field-container">
+                    <label class="input-label">Contraseña</label>
+                    <input type="password" id="login_pass" placeholder="••••••••">
+                    <div class="forgot-password">
+                        <a href="#">¿Olvidaste tu contraseña?</a>
+                    </div>
+                </div>
+            `;
+        } else {
+            logoSub.innerText = "Crea tu cuenta parkP2P hoy.";
+            formTitle.innerText = "Crear nueva cuenta";
+            btnAction.innerText = "Crear Cuenta";
+            toggleLink.innerHTML = '¿Ya tienes cuenta? <span>Inicia Sesión</span>';
+            
+            group.innerHTML = `
+                <div class="input-field-container">
+                    <label class="input-label">Nombre Completo</label>
+                    <input type="text" id="reg_fullname" placeholder="Juan Pérez">
+                </div>
+                <div class="input-field-container">
+                    <label class="input-label">Correo Electrónico</label>
+                    <input type="email" id="reg_email" placeholder="juan@correo.com">
+                </div>
+                <div class="input-field-container">
+                    <label class="input-label">Nombre de Usuario</label>
+                    <input type="text" id="reg_user" placeholder="juan_p2p">
+                </div>
+                <div class="input-field-container">
+                    <label class="input-label">Contraseña</label>
+                    <input type="password" id="reg_pass" placeholder="Mínimo 8 caracteres">
+                </div>
+                <div class="input-field-container">
+                    <label class="input-label">Confirmar Contraseña</label>
+                    <input type="password" id="reg_pass_confirm" placeholder="Repite tu contraseña">
+                </div>
+                <div class="checkbox-container">
+                    <input type="checkbox" id="reg_terms">
+                    <label for="reg_terms">Acepto los <a href="#">Términos de Servicio</a> y la <a href="#">Política de Privacidad</a></label>
+                </div>
+            `;
+        }
+    }
+
+    function cambiarModo() { modoLogin = !modoLogin; renderizarFormulario(); }
+
+    async function fetchConFailover(endpoint, bodyData) {
+        for (let i = 0; i < NODES.length; i++) {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 2000); // Failover rápido
+
+                const res = await fetch(`${NODES[i]}${endpoint}`, {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'ngrok-skip-browser-warning': 'true'
+                    },
+                    body: JSON.stringify(bodyData),
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+
+                if (res.status >= 500) throw new Error("Server Error");
+
+                const baseUrl = NODES[i].replace('/api', '');
+                return { ok: res.ok, data: await res.json(), baseUrl };
+            } catch (error) { console.warn(`Nodo ${i + 1} offline.`); }
+        }
+        throw new Error("Malla de servidores fuera de línea.");
+    }
+
+    async function procesarFormulario() {
+        if (modoLogin) {
+            const username = document.getElementById('login_user').value;
+            const password = document.getElementById('login_pass').value;
+            if(!username || !password) return mostrarStatus("Ingresa tus credenciales.", "red");
+
+            try {
+                const resultado = await fetchConFailover('/login', { username, password });
+                if(resultado.ok) {
+                    mostrarStatus("Acceso concedido.", "green");
+                    sessionStorage.setItem('usuarioParkP2P', username);
+                    // mapa.html vive en el mismo host estático que index.html, ya no en el nodo
+                    setTimeout(() => { window.location.href = "mapa.html"; }, 600);
+                } else { mostrarStatus("Credenciales incorrectas.", "red"); }
+            } catch (e) { mostrarStatus(e.message, "red"); }
+        } else {
+            const nombreCompleto = document.getElementById('reg_fullname').value;
+            const correo = document.getElementById('reg_email').value;
+            const username = document.getElementById('reg_user').value;
+            const password = document.getElementById('reg_pass').value;
+            const passConfirm = document.getElementById('reg_pass_confirm').value;
+            const terms = document.getElementById('reg_terms').checked;
+
+            if(!nombreCompleto || !correo || !username || !password || !passConfirm) return mostrarStatus("Campos obligatorios incompletos.", "red");
+            
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if(!emailRegex.test(correo)) return mostrarStatus("Por favor ingresa un correo electrónico válido.", "red");
+            
+            if(password.length < 8) return mostrarStatus("La contraseña debe tener al menos 8 caracteres.", "red");
+            if(password !== passConfirm) return mostrarStatus("Las contraseñas no coinciden.", "red");
+            if(!terms) return mostrarStatus("Debes aceptar las políticas.", "red");
+
+            try {
+                const resultado = await fetchConFailover('/registrar', { nombreCompleto, correo, username, password });
+                if(resultado.ok) {
+                    mostrarStatus("Usuario registrado con éxito.", "green");
+                    setTimeout(() => cambiarModo(), 1000);
+                } else { mostrarStatus("El nombre de usuario ya existe.", "red"); }
+            } catch (e) { mostrarStatus(e.message, "red"); }
+        }
+    }
+
+    function mostrarStatus(msg, color) {
+        const status = document.getElementById('status');
+        status.innerText = msg;
+        status.style.color = color === "green" ? "#10b981" : "#ef4444";
+    }
+
+    renderizarFormulario();
+</script>
+</body>
+</html>
