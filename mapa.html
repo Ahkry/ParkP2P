@@ -78,25 +78,26 @@ const NODES = ["https://reformist-unbaked-accuracy.ngrok-free.dev/api", "https:/
             window.location.href = "index.html";
         } else {
             cargarCajonesServidor();
-            iniciarSSE(); // Iniciar conexión en tiempo real
+            // Busca donde llamabas a iniciarSSE() y cámbialo por:
+            iniciarActualizacionAutomatica(); // Iniciar conexión en tiempo real
         }
     }
 
     // --- NUEVO: Server-Sent Events para actualización instantánea ---
-    function iniciarSSE() {
-        NODES.forEach(nodeUrl => {
-            const url = nodeUrl.replace('/api', '/api/stream');
-            const es = new EventSource(url);
-            es.onmessage = (e) => {
-                if (e.data === 'update') {
-                    cargarCajonesServidor(); // Refresca automático si hay cambios
-                }
-            };
-            es.onerror = () => {
-                console.warn(`SSE desconectado de ${url}. Intentará reconectar automáticamente.`);
-            };
-        });
-    }
+    function iniciarActualizacionAutomatica() {
+    console.log("Servicio de actualización en tiempo real activado (2s).");
+    
+    // Ejecuta la función de carga automáticamente cada 2 segundos
+    setInterval(async () => {
+        try {
+            // Usamos la lógica que ya tienes para traer los cajones
+            await cargarCajonesServidor(); 
+        } catch (error) {
+            console.warn("Buscando sincronización con los nodos...");
+        }
+    }, 2000); // 2000 ms = 2 segundos
+}
+    
 
     async function fetchConFailover(endpoint, method = 'GET', bodyData = null) {
         const ordenNodos = pisoActual === 1 ? [0, 1] : [1, 0];
