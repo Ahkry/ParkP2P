@@ -78,26 +78,71 @@ const NODES = ["https://reformist-unbaked-accuracy.ngrok-free.dev/api", "https:/
             window.location.href = "index.html";
         } else {
             cargarCajonesServidor();
-            // Busca donde llamabas a iniciarSSE() y cámbialo por:
-            iniciarActualizacionAutomatica(); // Iniciar conexión en tiempo real
+            iniciarSSE(); // Iniciar conexión en tiempo real
         }
     }
 
-    // --- NUEVO: Server-Sent Events para actualización instantánea ---
-    function iniciarActualizacionAutomatica() {
-    console.log("Servicio de actualización en tiempo real activado (2s).");
-    
-    // Ejecuta la función de carga automáticamente cada 2 segundos
-    setInterval(async () => {
-        try {
-            // Usamos la lógica que ya tienes para traer los cajones
-            await cargarCajonesServidor(); 
-        } catch (error) {
-            console.warn("Buscando sincronización con los nodos...");
+    // --- SSE real (push) con failover a un solo nodo activo ---
+    // Se usa fetch + streaming manual (no EventSource) porque EventSource no
+    // permite mandar headers personalizados, y ngrok (plan gratuito) requiere
+    // el header 'ngrok-skip-browser-warning' o devuelve su página de advertencia
+    // en vez del stream real. fetch sí puede mandar ese header.
+    let nodoSseActual = 0;
+    let streamControllerActual = null;
+
+    function iniciarSSE() {
+        // Si hay una conexión previa abierta, la cerramos limpiamente
+        if (streamControllerActual) {
+            streamControllerActual.abort();
         }
-    }, 2000); // 2000 ms = 2 segundos
-}
-    
+        conectarStreamManual();
+    }
+
+    async function conectarStreamManual() {
+        const baseUrl = NODES[nodoSseActual].replace('/api', '');
+        const urlStream = `${baseUrl}/api/stream`;
+        console.log(`[SSE] Intentando conectar al Nodo ${nodoSseActual + 1}...`);
+
+        streamControllerActual = new AbortController();
+
+        try {
+            const response = await fetch(urlStream, {
+                headers: { 'ngrok-skip-browser-warning': 'true' },
+                signal: streamControllerActual.signal
+            });
+            if (!response.ok || !response.body) throw new Error("Stream no disponible");
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) throw new Error("Servidor cerró el stream");
+
+                buffer += decoder.decode(value, { stream: true });
+                let idxFin;
+                while ((idxFin = buffer.indexOf("\n\n")) >= 0) {
+                    const evento = buffer.slice(0, idxFin);
+                    buffer = buffer.slice(idxFin + 2);
+                    if (evento.startsWith("data:") && evento.slice(5).trim() === "update") {
+                        console.log("Notificación push recibida: Actualizando mapa...");
+                        cargarCajonesServidor();
+                    }
+                }
+            }
+        } catch (error) {
+            if (error.name === 'AbortError') return; // cierre intencional, no es una falla
+
+            console.warn(`[SSE] Se perdió la conexión con el Nodo ${nodoSseActual + 1}. Ejecutando failover...`);
+
+            // Cambiamos al otro nodo (si era 0 pasa a 1, si era 1 pasa a 0)
+            nodoSseActual = nodoSseActual === 0 ? 1 : 0;
+
+            // Reintentamos la conexión con el nodo sobreviviente tras 1 segundo
+            setTimeout(conectarStreamManual, 1000);
+        }
+    }
 
     async function fetchConFailover(endpoint, method = 'GET', bodyData = null) {
         const ordenNodos = pisoActual === 1 ? [0, 1] : [1, 0];
