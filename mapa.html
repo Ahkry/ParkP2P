@@ -83,74 +83,19 @@ const NODES = ["https://reformist-unbaked-accuracy.ngrok-free.dev/api", "https:/
         }
     }
 
-    let sseAbortController = null;
-    let sseActivo = false;
-
     function iniciarActualizacionAutomatica() {
-        console.log("Servicio de actualización en tiempo real (SSE) activado.");
-        conectarSSE();
-
-        // Red de seguridad: si el stream se queda "colgado" sin disparar
-        // error (ej. túnel ngrok congelado) forzamos una resincronización.
-        // No es el mecanismo principal, solo un respaldo poco frecuente.
-        setInterval(() => {
-            if (!sseActivo) {
-                console.warn("SSE inactivo, resincronizando manualmente...");
-                cargarCajonesServidor();
-            }
-        }, 10000);
-    }
-
-    async function conectarSSE(indicePreferido = null) {
-        // Cierra cualquier conexión SSE previa antes de abrir una nueva
-        if (sseAbortController) sseAbortController.abort();
-        sseActivo = false;
-
-        const ordenNodos = pisoActual === 1 ? [0, 1] : [1, 0];
-        const index = indicePreferido !== null ? indicePreferido : ordenNodos[0];
-
-        const controller = new AbortController();
-        sseAbortController = controller;
-
+    console.log("Servicio de actualización en tiempo real activado (2s).");
+    
+    // Ejecuta la función de carga automáticamente cada 2 segundos
+    setInterval(async () => {
         try {
-            const res = await fetch(`${NODES[index]}/stream`, {
-                headers: { 'ngrok-skip-browser-warning': 'true' },
-                signal: controller.signal
-            });
-
-            if (!res.ok || !res.body) throw new Error("Stream no disponible");
-
-            console.log(` SSE conectado al Nodo ${index + 1}`);
-            sseActivo = true;
-            cargarCajonesServidor(); // sincroniza el estado al conectar
-
-            const reader = res.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = "";
-
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, { stream: true });
-
-                const eventos = buffer.split("\n\n");
-                buffer = eventos.pop(); // guarda el fragmento incompleto para el próximo chunk
-
-                eventos.forEach(bloque => {
-                    if (bloque.startsWith("data:")) {
-                        cargarCajonesServidor();
-                    }
-                });
-            }
-            throw new Error("Stream cerrado por el servidor");
+            // Usamos la lógica que ya tienes para traer los cajones
+            await cargarCajonesServidor(); 
         } catch (error) {
-            if (error.name === 'AbortError') return; // cierre intencional (cambio de piso/sesión)
-            sseActivo = false;
-            console.warn(`Nodo ${index + 1} SSE falló (${error.message}), intentando failover...`);
-            const otroIndex = index === 0 ? 1 : 0;
-            setTimeout(() => conectarSSE(otroIndex), 1500);
+            console.warn("Buscando sincronización con los nodos...");
         }
-    }
+    }, 2000); // 2000 ms = 2 segundos
+}
     
 
     async function fetchConFailover(endpoint, method = 'GET', bodyData = null) {
@@ -282,11 +227,9 @@ const NODES = ["https://reformist-unbaked-accuracy.ngrok-free.dev/api", "https:/
         document.getElementById('btnPiso2').classList.toggle('active', piso === 2);
         document.getElementById('seccionTitle').innerText = `Mis Reservas: Sección Piso ${piso}`;
         resetearCard();
-        conectarSSE(); // reconecta priorizando el nodo correcto para el nuevo piso
     }
 
     function cerrarSesion() {
-        if (sseAbortController) sseAbortController.abort();
         sessionStorage.removeItem('usuarioParkP2P');
         window.location.href = "index.html";
     }
